@@ -1,0 +1,14 @@
+[project]
+name = "home-lab-k8s-bootstrap"
+version = "0.1.0"
+description = "Kubernetes cluster bootstrap for home lab"
+requires-python = ">=3.8"
+dependencies = [
+    "pulumi>=3.100.0",
+    "pulumi-kubernetes>=4.10.0",
+    "pulumi-command>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

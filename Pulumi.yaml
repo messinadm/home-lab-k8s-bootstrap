@@ -1,0 +1,7 @@
+name: home-lab-k8s-bootstrap
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Kubernetes cluster bootstrap for home lab
