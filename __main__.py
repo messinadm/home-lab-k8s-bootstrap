@@ -8,6 +8,8 @@ k3s_options = [
     "--disable=traefik",  # We'll use our own ingress later
     "--write-kubeconfig-mode=644",  # Readable kubeconfig
 ]
+gitops_repo_path = "/home/sunnydmess/workspace/home-lab-gitops"
+argocd_overlay = f"{gitops_repo_path}/argocd/pop-os.433palmetto.com/bootstrap/overlays/pop-os.433palmetto.com"
 
 # LAYER 1: k3s Management via Command Provider
 
@@ -53,6 +55,21 @@ k8s_provider = k8s.Provider(
     opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
+# Bootstrap ArgoCD via Kustomize
+bootstrap_argocd = command.local.Command(
+    "bootstrap-argocd",
+    create=f"kubectl apply -k {argocd_overlay}",
+    delete=f"kubectl delete -k {argocd_overlay}",
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
+)
+
+# Wait for ArgoCD to be ready
+wait_for_argocd = command.local.Command(
+    "wait-for-argocd",
+    create="kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd",
+    opts=pulumi.ResourceOptions(depends_on=[bootstrap_argocd])
+)
+
 # Create media namespace
 media_namespace = k8s.core.v1.Namespace(
     "media-namespace",
@@ -93,5 +110,7 @@ jellyfin_media_pv = k8s.core.v1.PersistentVolume(
 
 # Export useful values
 pulumi.export("k3s_version", k3s_version)
+pulumi.export("argocd_namespace", "argocd")
 pulumi.export("media_namespace", media_namespace.metadata["name"])
 pulumi.export("kubeconfig_path", "$HOME/.kube/config")
+pulumi.export("argocd_admin_password_cmd", "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
