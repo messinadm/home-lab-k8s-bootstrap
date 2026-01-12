@@ -24,7 +24,7 @@ check_k3s = command.local.Command(
 install_k3s = command.local.Command(
     "install-k3s",
     create=f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={k3s_version} sh -s - {' '.join(k3s_options)}",
-    delete="/usr/local/bin/k3s-uninstall.sh",
+    delete="sudo /usr/local/bin/k3s-uninstall.sh",
     triggers=[k3s_version],  # Enables upgrades
     opts=pulumi.ResourceOptions(depends_on=[check_k3s])
 )
@@ -120,7 +120,7 @@ wait_for_crds = command.local.Command(
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
-    delete=f"kubectl delete -k {argocd_overlay}",
+    delete=f"kubectl delete -k {argocd_overlay} --ignore-not-found=true || true",
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds])
 )
 
