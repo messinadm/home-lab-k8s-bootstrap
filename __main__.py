@@ -1,15 +1,23 @@
 import pulumi
 import pulumi_command as command
 import pulumi_kubernetes as k8s
+import os
 
 # Configuration
+config = pulumi.Config()
+username = config.get("username") or os.getenv("SUDO_USER") or os.getenv("USER")
+home_dir = f"/home/{username}"
+server_name = config.get("server_name") or "pop-os.433palmetto.com"
+
 k3s_version = "v1.35.0+k3s1"  # Latest stable (Kubernetes 1.35)
 k3s_options = [
     "--disable=traefik",  # We'll use our own ingress later
     "--write-kubeconfig-mode=644",  # Readable kubeconfig
 ]
-gitops_repo_path = "/home/sunnydmess/workspace/home-lab-gitops"
-argocd_overlay = f"{gitops_repo_path}/argocd/pop-os.433palmetto.com/bootstrap/overlays/pop-os.433palmetto.com"
+gitops_repo_path = config.get("gitops_repo_path") or f"{home_dir}/workspace/home-lab-gitops"
+argocd_overlay = f"{gitops_repo_path}/argocd/{server_name}/bootstrap/overlays/{server_name}"
+ssh_key_path = config.get("ssh_key_path") or f"{home_dir}/.ssh/home-lab-gitops_ed25519"
+kubeconfig_path = f"{home_dir}/.kube/config"
 
 # LAYER 1: k3s Management via Command Provider
 
@@ -32,11 +40,11 @@ install_k3s = command.local.Command(
 # 3. Setup kubeconfig access
 setup_kubeconfig = command.local.Command(
     "setup-kubeconfig",
-    create="""
-        mkdir -p /home/sunnydmess/.kube && \
-        cp /etc/rancher/k3s/k3s.yaml /home/sunnydmess/.kube/config && \
-        chown sunnydmess:sunnydmess /home/sunnydmess/.kube/config && \
-        chmod 600 /home/sunnydmess/.kube/config
+    create=f"""
+        mkdir -p {home_dir}/.kube && \
+        cp /etc/rancher/k3s/k3s.yaml {kubeconfig_path} && \
+        chown {username}:{username} {kubeconfig_path} && \
+        chmod 600 {kubeconfig_path}
     """,
     triggers=[install_k3s.stdout],  # Re-run when k3s is reinstalled
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
@@ -54,7 +62,7 @@ wait_for_k3s = command.local.Command(
 # Configure K8s provider to use our k3s cluster
 k8s_provider = k8s.Provider(
     "k3s",
-    kubeconfig=pulumi.Output.secret("/home/sunnydmess/.kube/config"),
+    kubeconfig=pulumi.Output.secret(kubeconfig_path),
     opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
@@ -66,7 +74,7 @@ create_argocd_namespace = command.local.Command(
 )
 
 # Read SSH private key for GitOps repository
-with open("/home/sunnydmess/.ssh/home-lab-gitops_ed25519", "r") as f:
+with open(ssh_key_path, "r") as f:
     ssh_private_key = f.read()
 
 # Create ArgoCD repository secret for GitOps access
@@ -127,7 +135,9 @@ create_media_namespace = command.local.Command(
 
 # Export useful values
 pulumi.export("k3s_version", k3s_version)
+pulumi.export("username", username)
+pulumi.export("server_name", server_name)
 pulumi.export("argocd_namespace", "argocd")
 pulumi.export("media_namespace", "media")
-pulumi.export("kubeconfig_path", "$HOME/.kube/config")
+pulumi.export("kubeconfig_path", kubeconfig_path)
 pulumi.export("argocd_admin_password_cmd", "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
