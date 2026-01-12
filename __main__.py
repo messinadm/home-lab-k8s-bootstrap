@@ -53,7 +53,14 @@ setup_kubeconfig = command.local.Command(
 # Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
-    create="kubectl wait --for=condition=ready node --all --timeout=60s",
+    create="""
+        for i in {1..60}; do
+            if kubectl get nodes &>/dev/null; then
+                kubectl wait --for=condition=ready node --all --timeout=60s && break
+            fi
+            sleep 1
+        done
+    """,
     opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
 )
 
