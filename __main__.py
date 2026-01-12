@@ -113,10 +113,12 @@ wait_for_crds = command.local.Command(
 )
 
 # Bootstrap ArgoCD via Kustomize
-# Note: No delete action - k3s-uninstall.sh will clean up all K8s resources
+# Trigger on namespace ID so it re-runs after destroy/recreate
+# (namespace gets new UID when cluster is destroyed and rebuilt)
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
+    triggers=[argocd_namespace.id],  # Re-run when namespace is recreated (new UID after destroy)
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, argocd_namespace, argocd_repo_secret])
 )
 
