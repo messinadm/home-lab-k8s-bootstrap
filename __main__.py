@@ -120,7 +120,12 @@ wait_for_crds = command.local.Command(
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
-    delete=f"kubectl delete -k {argocd_overlay} --ignore-not-found=true || true",
+    delete="""
+        kubectl delete applications --all -n argocd --ignore-not-found=true --wait=false ; \
+        kubectl delete applicationsets --all -n argocd --ignore-not-found=true --wait=false ; \
+        kubectl delete -k """ + argocd_overlay + """ --ignore-not-found=true ; \
+        exit 0
+    """,
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds])
 )
 
