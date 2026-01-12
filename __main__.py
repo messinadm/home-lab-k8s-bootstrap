@@ -141,7 +141,18 @@ wait_for_crds = command.local.Command(
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
-    delete="kubectl delete applications --all -n argocd --wait=true --timeout=120s 2>/dev/null || true ; kubectl delete applicationsets --all -n argocd --wait=true --timeout=60s 2>/dev/null || true",
+    delete="""
+        # Remove finalizers from all applications to prevent hanging
+        for app in $(kubectl get applications -n argocd -o name 2>/dev/null); do
+            kubectl patch $app -n argocd -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+        done
+        kubectl delete applications --all -n argocd --wait=false 2>/dev/null || true
+        # Remove finalizers from all applicationsets
+        for appset in $(kubectl get applicationsets -n argocd -o name 2>/dev/null); do
+            kubectl patch $appset -n argocd -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+        done
+        kubectl delete applicationsets --all -n argocd --wait=false 2>/dev/null || true
+    """,
     triggers=[argocd_namespace.id],  # Re-run when namespace is recreated (new UID after destroy)
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, argocd_namespace, argocd_repo_secret])
 )
