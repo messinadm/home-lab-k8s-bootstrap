@@ -33,9 +33,10 @@ install_k3s = command.local.Command(
 setup_kubeconfig = command.local.Command(
     "setup-kubeconfig",
     create="""
-        mkdir -p $HOME/.kube && \
-        sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config && \
-        sudo chown $USER:$USER $HOME/.kube/config
+        mkdir -p /home/sunnydmess/.kube && \
+        cp /etc/rancher/k3s/k3s.yaml /home/sunnydmess/.kube/config && \
+        chown sunnydmess:sunnydmess /home/sunnydmess/.kube/config && \
+        chmod 600 /home/sunnydmess/.kube/config
     """,
     triggers=[install_k3s.stdout],  # Re-run when k3s is reinstalled
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
