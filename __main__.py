@@ -41,11 +41,22 @@ setup_kubeconfig = command.local.Command(
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
 )
 
+# 3.5. Ensure containerd uses k3s's CNI bin path
+# GPU Operator may modify this to /opt/cni/bin, so enforce correct path
+fix_containerd_cni_path = command.local.Command(
+    "fix-containerd-cni-path",
+    create="""
+        sudo sed -i 's|/opt/cni/bin|/var/lib/rancher/k3s/data/current/bin|g' /var/lib/rancher/k3s/agent/etc/containerd/config.toml && \
+        sudo systemctl restart k3s
+    """,
+    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
+)
+
 # 4. Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
     create="kubectl wait --for=condition=ready node --all --timeout=60s",
-    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
+    opts=pulumi.ResourceOptions(depends_on=[fix_containerd_cni_path])
 )
 
 # LAYER 2: Kubernetes Resources via Kubernetes Provider
