@@ -30,8 +30,6 @@ install_k3s = command.local.Command(
 )
 
 # 3. Setup kubeconfig access
-# Note: NVIDIA drivers and toolkit managed by Pop!_OS (system packages)
-# GPU Operator (deployed via ArgoCD) handles Kubernetes GPU integration
 setup_kubeconfig = command.local.Command(
     "setup-kubeconfig",
     create="""
@@ -129,8 +127,8 @@ media_namespace = k8s.core.v1.Namespace(
 # Note: Using k3s's built-in local-path storage class for dynamic provisioning
 # PVCs are created by the Jellyfin Helm chart, PVs are auto-provisioned by local-path
 
-# Note: NVIDIA GPU support is handled by GPU Operator (deployed via ArgoCD)
-# GPU Operator manages device plugin, runtime configuration, and GPU feature discovery
+# Note: NVIDIA GPU support handled by k3s native runtime detection
+# k3s automatically detects nvidia-container-runtime if installed on the host
 
 # Export useful values
 pulumi.export("k3s_version", k3s_version)
