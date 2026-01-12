@@ -28,7 +28,26 @@ install_k3s = command.local.Command(
     opts=pulumi.ResourceOptions(depends_on=[check_k3s])
 )
 
-# 3. Setup kubeconfig access
+# 3. Install NVIDIA Container Toolkit (Pop!_OS includes this in repos)
+install_nvidia_toolkit = command.local.Command(
+    "install-nvidia-toolkit",
+    create="""
+        # Check if already installed
+        if ! dpkg -l | grep -q nvidia-container-toolkit; then
+            sudo apt-get update && \
+            sudo apt-get install -y nvidia-container-toolkit && \
+            # Configure containerd for k3s
+            sudo nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml && \
+            # Restart k3s to pick up GPU configuration
+            sudo systemctl restart k3s
+        else
+            echo "NVIDIA Container Toolkit already installed"
+        fi
+    """,
+    opts=pulumi.ResourceOptions(depends_on=[install_k3s])
+)
+
+# 4. Setup kubeconfig access
 setup_kubeconfig = command.local.Command(
     "setup-kubeconfig",
     create="""
@@ -36,10 +55,10 @@ setup_kubeconfig = command.local.Command(
         sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config && \
         sudo chown $USER:$USER $HOME/.kube/config
     """,
-    opts=pulumi.ResourceOptions(depends_on=[install_k3s])
+    opts=pulumi.ResourceOptions(depends_on=[install_nvidia_toolkit])
 )
 
-# 4. Wait for k3s to be ready
+# 5. Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
     create="kubectl wait --for=condition=ready node --all --timeout=60s",
