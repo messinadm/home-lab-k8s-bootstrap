@@ -39,26 +39,14 @@ setup_kubeconfig = command.local.Command(
         sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config && \
         sudo chown $USER:$USER $HOME/.kube/config
     """,
-    delete="rm -f $HOME/.kube/config",
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
 )
 
-# 3.5. Ensure containerd uses k3s's CNI bin path
-# GPU Operator may modify this to /opt/cni/bin, so enforce correct path
-fix_containerd_cni_path = command.local.Command(
-    "fix-containerd-cni-path",
-    create="""
-        sudo sed -i 's|/opt/cni/bin|/var/lib/rancher/k3s/data/current/bin|g' /var/lib/rancher/k3s/agent/etc/containerd/config.toml && \
-        sudo systemctl restart k3s
-    """,
-    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
-)
-
-# 4. Wait for k3s to be ready
+# Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
     create="kubectl wait --for=condition=ready node --all --timeout=60s",
-    opts=pulumi.ResourceOptions(depends_on=[fix_containerd_cni_path])
+    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
 )
 
 # LAYER 2: Kubernetes Resources via Kubernetes Provider
@@ -117,15 +105,10 @@ wait_for_crds = command.local.Command(
 )
 
 # Bootstrap ArgoCD via Kustomize
+# Note: No delete action - k3s-uninstall.sh will clean up all K8s resources
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
-    delete="""
-        kubectl delete applications --all -n argocd --ignore-not-found=true --wait=false ; \
-        kubectl delete applicationsets --all -n argocd --ignore-not-found=true --wait=false ; \
-        kubectl delete -k """ + argocd_overlay + """ --ignore-not-found=true ; \
-        exit 0
-    """,
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds])
 )
 
