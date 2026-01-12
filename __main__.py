@@ -108,6 +108,7 @@ wait_for_crds = command.local.Command(
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
+    triggers=[argocd_namespace.id],  # Re-run when namespace is recreated
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, argocd_namespace, argocd_repo_secret])
 )
 
