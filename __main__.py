@@ -50,6 +50,22 @@ setup_kubeconfig = command.local.Command(
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
 )
 
+# 3.5. Configure NVIDIA runtime for k3s
+# k3s uses config.toml.tmpl as template, config.toml as active config
+configure_nvidia_runtime = command.local.Command(
+    "configure-nvidia-runtime",
+    create="""
+        if [ -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl ]; then
+            nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+        else
+            nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml
+        fi && \
+        systemctl restart k3s
+    """,
+    triggers=[install_k3s.stdout],  # Re-run when k3s is reinstalled
+    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
+)
+
 # Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
@@ -61,7 +77,7 @@ wait_for_k3s = command.local.Command(
             sleep 1
         done
     """,
-    opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
+    opts=pulumi.ResourceOptions(depends_on=[configure_nvidia_runtime])
 )
 
 # LAYER 2: Kubernetes Resources via Kubernetes Provider
@@ -134,6 +150,13 @@ wait_for_argocd = command.local.Command(
     "wait-for-argocd",
     create="kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd",
     opts=pulumi.ResourceOptions(depends_on=[bootstrap_argocd])
+)
+
+# Deploy NVIDIA device plugin for GPU support
+deploy_nvidia_device_plugin = command.local.Command(
+    "deploy-nvidia-device-plugin",
+    create="kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml",
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
 # Create media namespace (using K8s provider for drift detection)
