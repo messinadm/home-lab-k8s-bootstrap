@@ -3,7 +3,7 @@ import pulumi_command as command
 import pulumi_kubernetes as k8s
 
 # Configuration
-k3s_version = "v1.28.5+k3s1"
+k3s_version = "v1.35.0+k3s1"  # Latest stable (Kubernetes 1.35)
 k3s_options = [
     "--disable=traefik",  # We'll use our own ingress later
     "--write-kubeconfig-mode=644",  # Readable kubeconfig
@@ -28,26 +28,9 @@ install_k3s = command.local.Command(
     opts=pulumi.ResourceOptions(depends_on=[check_k3s])
 )
 
-# 3. Install NVIDIA Container Toolkit (Pop!_OS includes this in repos)
-install_nvidia_toolkit = command.local.Command(
-    "install-nvidia-toolkit",
-    create="""
-        # Check if already installed
-        if ! dpkg -l | grep -q nvidia-container-toolkit; then
-            sudo apt-get update && \
-            sudo apt-get install -y nvidia-container-toolkit && \
-            # Configure containerd for k3s
-            sudo nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml && \
-            # Restart k3s to pick up GPU configuration
-            sudo systemctl restart k3s
-        else
-            echo "NVIDIA Container Toolkit already installed"
-        fi
-    """,
-    opts=pulumi.ResourceOptions(depends_on=[install_k3s])
-)
-
-# 4. Setup kubeconfig access
+# 3. Setup kubeconfig access
+# Note: NVIDIA drivers and toolkit managed by Pop!_OS (system packages)
+# GPU Operator (deployed via ArgoCD) handles Kubernetes GPU integration
 setup_kubeconfig = command.local.Command(
     "setup-kubeconfig",
     create="""
@@ -55,10 +38,10 @@ setup_kubeconfig = command.local.Command(
         sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config && \
         sudo chown $USER:$USER $HOME/.kube/config
     """,
-    opts=pulumi.ResourceOptions(depends_on=[install_nvidia_toolkit])
+    opts=pulumi.ResourceOptions(depends_on=[install_k3s])
 )
 
-# 5. Wait for k3s to be ready
+# 4. Wait for k3s to be ready
 wait_for_k3s = command.local.Command(
     "wait-for-k3s",
     create="kubectl wait --for=condition=ready node --all --timeout=60s",
@@ -74,12 +57,58 @@ k8s_provider = k8s.Provider(
     opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
+# Create ArgoCD namespace
+argocd_namespace = k8s.core.v1.Namespace(
+    "argocd-namespace",
+    metadata=k8s.meta.v1.ObjectMetaArgs(name="argocd"),
+    opts=pulumi.ResourceOptions(provider=k8s_provider)
+)
+
+# Read SSH private key for GitOps repository
+with open("/home/sunnydmess/.ssh/home-lab-gitops_ed25519", "r") as f:
+    ssh_private_key = f.read()
+
+# Create ArgoCD repository secret for GitOps access
+argocd_repo_secret = k8s.core.v1.Secret(
+    "argocd-gitops-repo-secret",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="home-lab-gitops-repo",
+        namespace="argocd",
+        labels={
+            "argocd.argoproj.io/secret-type": "repository"
+        }
+    ),
+    string_data={
+        "type": "git",
+        "url": "git@github.com:sunnydmess/home-lab-gitops.git",
+        "sshPrivateKey": ssh_private_key
+    },
+    opts=pulumi.ResourceOptions(
+        provider=k8s_provider,
+        depends_on=[argocd_namespace]
+    )
+)
+
+# Install ArgoCD CRDs first (needed before Application resources)
+install_argocd_crds = command.local.Command(
+    "install-argocd-crds",
+    create="kubectl apply -k https://github.com/argoproj/argo-cd/manifests/crds\\?ref\\=stable",
+    opts=pulumi.ResourceOptions(depends_on=[argocd_repo_secret])
+)
+
+# Wait for CRDs to be established
+wait_for_crds = command.local.Command(
+    "wait-for-argocd-crds",
+    create="kubectl wait --for condition=established --timeout=60s crd/applications.argoproj.io crd/applicationsets.argoproj.io crd/appprojects.argoproj.io",
+    opts=pulumi.ResourceOptions(depends_on=[install_argocd_crds])
+)
+
 # Bootstrap ArgoCD via Kustomize
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
     delete=f"kubectl delete -k {argocd_overlay}",
-    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_crds])
 )
 
 # Wait for ArgoCD to be ready
@@ -96,36 +125,11 @@ media_namespace = k8s.core.v1.Namespace(
     opts=pulumi.ResourceOptions(provider=k8s_provider)
 )
 
-# Create PersistentVolumes (hostPath for now, NFS later)
-jellyfin_config_pv = k8s.core.v1.PersistentVolume(
-    "jellyfin-config-pv",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="jellyfin-config-pv"),
-    spec=k8s.core.v1.PersistentVolumeSpecArgs(
-        capacity={"storage": "10Gi"},
-        access_modes=["ReadWriteOnce"],
-        host_path=k8s.core.v1.HostPathVolumeSourceArgs(
-            path="/data/jellyfin/config",
-            type="DirectoryOrCreate",
-        ),
-        storage_class_name="local-storage",
-    ),
-    opts=pulumi.ResourceOptions(provider=k8s_provider)
-)
+# Note: Using k3s's built-in local-path storage class for dynamic provisioning
+# PVCs are created by the Jellyfin Helm chart, PVs are auto-provisioned by local-path
 
-jellyfin_media_pv = k8s.core.v1.PersistentVolume(
-    "jellyfin-media-pv",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="jellyfin-media-pv"),
-    spec=k8s.core.v1.PersistentVolumeSpecArgs(
-        capacity={"storage": "500Gi"},
-        access_modes=["ReadWriteMany"],  # Future NFS compatibility
-        host_path=k8s.core.v1.HostPathVolumeSourceArgs(
-            path="/data/jellyfin/media",
-            type="DirectoryOrCreate",
-        ),
-        storage_class_name="local-storage",
-    ),
-    opts=pulumi.ResourceOptions(provider=k8s_provider)
-)
+# Note: NVIDIA GPU support is handled by GPU Operator (deployed via ArgoCD)
+# GPU Operator manages device plugin, runtime configuration, and GPU feature discovery
 
 # Export useful values
 pulumi.export("k3s_version", k3s_version)
