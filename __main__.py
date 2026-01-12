@@ -24,6 +24,7 @@ check_k3s = command.local.Command(
 install_k3s = command.local.Command(
     "install-k3s",
     create=f"curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={k3s_version} sh -s - {' '.join(k3s_options)}",
+    delete="/usr/local/bin/k3s-uninstall.sh",
     triggers=[k3s_version],  # Enables upgrades
     opts=pulumi.ResourceOptions(depends_on=[check_k3s])
 )
@@ -38,6 +39,7 @@ setup_kubeconfig = command.local.Command(
         sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config && \
         sudo chown $USER:$USER $HOME/.kube/config
     """,
+    delete="rm -f $HOME/.kube/config",
     opts=pulumi.ResourceOptions(depends_on=[install_k3s])
 )
 
