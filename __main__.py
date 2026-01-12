@@ -58,10 +58,10 @@ k8s_provider = k8s.Provider(
 )
 
 # Create ArgoCD namespace
-argocd_namespace = k8s.core.v1.Namespace(
-    "argocd-namespace",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="argocd"),
-    opts=pulumi.ResourceOptions(provider=k8s_provider)
+create_argocd_namespace = command.local.Command(
+    "create-argocd-namespace",
+    create="kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -",
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
 # Read SSH private key for GitOps repository
@@ -69,31 +69,24 @@ with open("/home/sunnydmess/.ssh/home-lab-gitops_ed25519", "r") as f:
     ssh_private_key = f.read()
 
 # Create ArgoCD repository secret for GitOps access
-argocd_repo_secret = k8s.core.v1.Secret(
-    "argocd-gitops-repo-secret",
-    metadata=k8s.meta.v1.ObjectMetaArgs(
-        name="home-lab-gitops-repo",
-        namespace="argocd",
-        labels={
-            "argocd.argoproj.io/secret-type": "repository"
-        }
-    ),
-    string_data={
-        "type": "git",
-        "url": "git@github.com:sunnydmess/home-lab-gitops.git",
-        "sshPrivateKey": ssh_private_key
-    },
-    opts=pulumi.ResourceOptions(
-        provider=k8s_provider,
-        depends_on=[argocd_namespace]
-    )
+create_argocd_repo_secret = command.local.Command(
+    "create-argocd-repo-secret",
+    create=f"""kubectl create secret generic home-lab-gitops-repo \
+        --namespace=argocd \
+        --from-literal=type=git \
+        --from-literal=url=git@github.com:sunnydmess/home-lab-gitops.git \
+        --from-literal=sshPrivateKey='{ssh_private_key}' \
+        --dry-run=client -o yaml | \
+        kubectl label -f - --local argocd.argoproj.io/secret-type=repository -o yaml | \
+        kubectl apply -f -""",
+    opts=pulumi.ResourceOptions(depends_on=[create_argocd_namespace])
 )
 
 # Install ArgoCD CRDs first (needed before Application resources)
 install_argocd_crds = command.local.Command(
     "install-argocd-crds",
     create="kubectl apply -k https://github.com/argoproj/argo-cd/manifests/crds\\?ref\\=stable",
-    opts=pulumi.ResourceOptions(depends_on=[argocd_repo_secret])
+    opts=pulumi.ResourceOptions(depends_on=[create_argocd_repo_secret])
 )
 
 # Wait for CRDs to be established
@@ -108,8 +101,7 @@ wait_for_crds = command.local.Command(
 bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
-    triggers=[argocd_namespace.id],  # Re-run when namespace is recreated
-    opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, argocd_namespace, argocd_repo_secret])
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, create_argocd_namespace, create_argocd_repo_secret])
 )
 
 # Wait for ArgoCD to be ready
@@ -120,10 +112,10 @@ wait_for_argocd = command.local.Command(
 )
 
 # Create media namespace
-media_namespace = k8s.core.v1.Namespace(
-    "media-namespace",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="media"),
-    opts=pulumi.ResourceOptions(provider=k8s_provider)
+create_media_namespace = command.local.Command(
+    "create-media-namespace",
+    create="kubectl create namespace media --dry-run=client -o yaml | kubectl apply -f -",
+    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
 )
 
 # Note: Using k3s's built-in local-path storage class for dynamic provisioning
@@ -135,6 +127,6 @@ media_namespace = k8s.core.v1.Namespace(
 # Export useful values
 pulumi.export("k3s_version", k3s_version)
 pulumi.export("argocd_namespace", "argocd")
-pulumi.export("media_namespace", media_namespace.metadata["name"])
+pulumi.export("media_namespace", "media")
 pulumi.export("kubeconfig_path", "$HOME/.kube/config")
 pulumi.export("argocd_admin_password_cmd", "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
