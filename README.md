@@ -266,6 +266,44 @@ pulumi refresh
 pulumi stack export > backup.json
 ```
 
+## Quick Reference Commands
+
+### Startup (Fresh Install or After Destroy)
+```bash
+cd ~/workspace/home-lab-k8s-bootstrap
+sudo -E pulumi up
+```
+
+This will:
+1. Install k3s (Kubernetes)
+2. Configure NVIDIA runtime
+3. Deploy ArgoCD
+4. Create namespaces
+5. ArgoCD then deploys apps from GitOps repo (Jellyfin, NVIDIA device plugin, etc.)
+
+### Teardown (Full Destroy)
+```bash
+cd ~/workspace/home-lab-k8s-bootstrap
+sudo -E pulumi destroy
+```
+
+This will:
+1. Delete all ArgoCD applications (cascading delete)
+2. Remove ApplicationSets
+3. Clean up stuck finalizers
+4. Uninstall k3s completely
+5. Remove kubeconfig
+
+### Preview Changes
+```bash
+sudo -E pulumi preview
+```
+
+### Refresh State
+```bash
+sudo -E pulumi refresh
+```
+
 ## Maintenance
 
 ### Upgrade k3s

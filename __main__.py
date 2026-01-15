@@ -171,11 +171,38 @@ bootstrap_argocd = command.local.Command(
     "bootstrap-argocd",
     create=f"kubectl apply -k {argocd_overlay}",
     delete="""
-        # Delete app-of-apps which cascades to delete all child Applications
+        set -e
+        echo "=== ArgoCD Teardown ==="
+
+        # Step 1: Delete app-of-apps to cascade delete all child Applications
         # This happens while ArgoCD is still running so finalizers work properly
-        kubectl delete application argocd-applications -n argocd --wait=true --timeout=120s 2>/dev/null || true
-        # Delete ApplicationSets
+        echo "Deleting app-of-apps (cascades to all applications)..."
+        kubectl delete application argocd-applications -n argocd --wait=true --timeout=180s 2>/dev/null || true
+
+        # Step 2: Wait for applications to be cleaned up
+        echo "Waiting for applications to be deleted..."
+        for i in {1..60}; do
+            count=$(kubectl get applications -n argocd --no-headers 2>/dev/null | wc -l)
+            if [ "$count" -le 1 ]; then
+                echo "Applications cleaned up"
+                break
+            fi
+            echo "Waiting... ($count applications remaining)"
+            sleep 2
+        done
+
+        # Step 3: Delete any remaining ApplicationSets
+        echo "Deleting ApplicationSets..."
         kubectl delete applicationsets --all -n argocd --wait=true --timeout=60s 2>/dev/null || true
+
+        # Step 4: Clean up any stuck applications with finalizers
+        echo "Removing finalizers from any stuck applications..."
+        for app in $(kubectl get applications -n argocd -o name 2>/dev/null); do
+            kubectl patch $app -n argocd --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+        done
+        kubectl delete applications --all -n argocd --wait=true --timeout=30s 2>/dev/null || true
+
+        echo "=== ArgoCD Teardown Complete ==="
     """,
     triggers=[argocd_namespace.id],  # Re-run when namespace is recreated (new UID after destroy)
     opts=pulumi.ResourceOptions(depends_on=[wait_for_crds, argocd_namespace, argocd_repo_secret])
@@ -211,3 +238,29 @@ pulumi.export("argocd_namespace", "argocd")
 pulumi.export("media_namespace", media_namespace.metadata["name"])
 pulumi.export("kubeconfig_path", kubeconfig_path)
 pulumi.export("argocd_admin_password_cmd", "kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
+
+# Usage instructions
+pulumi.export("usage", """
+================================================================================
+STARTUP/TEARDOWN COMMANDS
+================================================================================
+
+STARTUP (fresh install or after destroy):
+  cd ~/workspace/home-lab-k8s-bootstrap
+  sudo -E pulumi up
+
+TEARDOWN (full cluster destroy):
+  cd ~/workspace/home-lab-k8s-bootstrap
+  sudo -E pulumi destroy
+
+UPGRADE k3s:
+  1. Update k3s_version in __main__.py
+  2. sudo -E pulumi up
+
+VERIFY:
+  kubectl get nodes
+  kubectl get pods -A
+  kubectl get applications -n argocd
+
+================================================================================
+""")
