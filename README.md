@@ -192,19 +192,55 @@ sudo /usr/local/bin/k3s-uninstall.sh
 ```
 
 ### NVIDIA GPU Not Available
-```bash
-# Check if toolkit is installed
-dpkg -l | grep nvidia-container-toolkit
 
-# Check containerd config
-sudo cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml | grep nvidia
+**Common Issues and Solutions:**
 
-# Restart k3s
-sudo systemctl restart k3s
+1. **Driver/Library Version Mismatch**
+   ```bash
+   # Check for version mismatch
+   nvidia-smi
+   # If you see "Failed to initialize NVML: Driver/library version mismatch"
+   # Solution: Reboot to load matching kernel module
+   sudo reboot
+   ```
 
-# Verify GPU is visible
-kubectl describe nodes | grep nvidia.com/gpu
-```
+2. **Device Plugin Not Detecting GPU**
+   ```bash
+   # Check device plugin logs
+   kubectl logs -n kube-system -l name=nvidia-device-plugin-ds
+
+   # If you see "Incompatible strategy detected auto", redeploy with NVML strategy:
+   kubectl delete daemonset nvidia-device-plugin-daemonset -n kube-system
+   # Then apply the device plugin with DEVICE_DISCOVERY_STRATEGY=nvml
+   ```
+
+3. **RuntimeClass Not Found**
+   ```bash
+   # Verify nvidia RuntimeClass exists
+   kubectl get runtimeclass nvidia
+
+   # k3s auto-creates this when it detects nvidia-container-runtime
+   # If missing, restart k3s:
+   sudo systemctl restart k3s
+   ```
+
+4. **General Checks**
+   ```bash
+   # Check if toolkit is installed
+   dpkg -l | grep nvidia-container-toolkit
+
+   # Check containerd config for nvidia runtime
+   sudo grep nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+
+   # Verify GPU is visible to Kubernetes
+   kubectl describe nodes | grep nvidia.com/gpu
+
+   # Test GPU access in a pod
+   kubectl run gpu-test --image=nvidia/cuda:12.2.0-base-ubuntu22.04 \
+     --restart=Never --rm -it \
+     --overrides='{"spec":{"runtimeClassName":"nvidia"}}' \
+     -- nvidia-smi
+   ```
 
 ### ArgoCD Not Starting
 ```bash

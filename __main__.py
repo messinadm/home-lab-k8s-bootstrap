@@ -14,6 +14,7 @@ k3s_options = [
     "--disable=traefik",  # We'll use our own ingress later
     "--write-kubeconfig-mode=644",  # Readable kubeconfig
 ]
+nvidia_runtime_version = "v2"  # Bump to force nvidia-ctk reconfiguration
 gitops_repo_path = config.get("gitops_repo_path") or f"{home_dir}/workspace/home-lab-gitops"
 argocd_overlay = f"{gitops_repo_path}/argocd/{server_name}/bootstrap/overlays/{server_name}"
 ssh_key_path = config.get("ssh_key_path") or f"{home_dir}/.ssh/home-lab-gitops_ed25519"
@@ -51,18 +52,46 @@ setup_kubeconfig = command.local.Command(
 )
 
 # 3.5. Configure NVIDIA runtime for k3s
-# k3s uses config.toml.tmpl as template, config.toml as active config
+# k3s auto-detects nvidia-container-runtime when installed
+# We just need to remove any bad config.toml.tmpl that might override defaults
 configure_nvidia_runtime = command.local.Command(
     "configure-nvidia-runtime",
     create="""
+        set -e
+        echo "Configuring NVIDIA Container Runtime for k3s..."
+
+        # Wait for k3s containerd config directory to exist
+        for i in {1..30}; do
+            if [ -d /var/lib/rancher/k3s/agent/etc/containerd ]; then
+                break
+            fi
+            echo "Waiting for k3s containerd config directory..."
+            sleep 1
+        done
+
+        # Remove any custom config.toml.tmpl to let k3s use defaults
+        # k3s will auto-detect nvidia-container-runtime if it's in PATH
         if [ -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl ]; then
-            nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+            echo "Removing custom config.toml.tmpl to restore k3s defaults..."
+            sudo rm -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+        fi
+
+        echo "Restarting k3s to regenerate default containerd config..."
+        sudo systemctl restart k3s
+
+        echo "Waiting for k3s to be ready..."
+        sleep 10
+
+        # Verify NVIDIA runtime was detected
+        if sudo grep -q nvidia /var/lib/rancher/k3s/agent/etc/containerd/config.toml 2>/dev/null; then
+            echo "✓ NVIDIA runtime detected by k3s"
         else
-            nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml
-        fi && \
-        systemctl restart k3s
+            echo "⚠ NVIDIA runtime not detected - may need manual configuration"
+        fi
+
+        echo "NVIDIA runtime configuration complete"
     """,
-    triggers=[install_k3s.stdout],  # Re-run when k3s is reinstalled
+    triggers=[install_k3s.stdout, nvidia_runtime_version],  # Re-run when k3s is reinstalled or version bumped
     opts=pulumi.ResourceOptions(depends_on=[setup_kubeconfig])
 )
 
@@ -159,12 +188,7 @@ wait_for_argocd = command.local.Command(
     opts=pulumi.ResourceOptions(depends_on=[bootstrap_argocd])
 )
 
-# Deploy NVIDIA device plugin for GPU support
-deploy_nvidia_device_plugin = command.local.Command(
-    "deploy-nvidia-device-plugin",
-    create="kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.17.1/deployments/static/nvidia-device-plugin.yml",
-    opts=pulumi.ResourceOptions(depends_on=[wait_for_k3s])
-)
+# Note: NVIDIA GPU Operator is managed via ArgoCD GitOps (see home-lab-gitops repo)
 
 # Create media namespace (using K8s provider for drift detection)
 media_namespace = k8s.core.v1.Namespace(
